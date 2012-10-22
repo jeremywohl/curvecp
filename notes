@@ -1,0 +1,82 @@
+Rules:
+
+1. Clients resend Hello packets when they do not see a (valid) Cookie packet in response.  Reasonable delay: 1 sec.
+2. A server can send several Cookie packets to one client, a client can send several Initiate packets.
+3. A client may only send 2^64 packets in a connection (will never be reached).
+4. Message packets must include nonces that are monotically increasing, to allow them to discard "prior" lower-nonced packets.
+5. Use whatever IP address the clients is currently sending from.
+
+Heuristics:
+
+1. Monotically increasing nonces could start from random 0-2^48-1.
+2. Message length may be padded to a restricted set of lengths to reduce information leak.
+3. Clients should rotate among IPs provided for a server, when resending Hello packets.
+4. Discard new Hello's/Initiate's from active C' connections (though we have to respond to repeated Initiate's -- ack only?).
+5. Discard new Hello's/Initiate's from used C', expire cache with minute keys.
+6. Discard packets with nonces less than or equal to latest (if latest is some other position)?
+
+Questions:
+
+1. With minute keys, what is 2-minute timeout mentioned?
+
+Global state:
+
+1. minute key + cache of used C'
+
+Per-connection state:
+
+0. current client IP, port and extension
+1. 8-byte increasing nonce, both local and last received
+2. received byte position
+3. received missing bytes range map?
+4. unacknowledged outgoing bytes
+
+Packets:
+
+Common format:
+8-byte identifier
+16-byte receiver extension
+16-byte sender extension
+...
+24-byte nonce (little-endian)
+
+Hello 224 bytes:
+QvnQ5XlH, sext, cext, C', 0, n, Box[0'](C'->S)
+   -- C' is client's short-term public key, S is server's long-term public key
+   -- 0 is zero-padding (64 bytes)
+   -- increasing nonce (8 bytes), 24-byte nonce formed with "CurveCP-client-H" prefixed
+   -- 0' is zero-padding (64 bytes, 80-byte box)
+   -- Box is 80 bytes
+
+Cookie 200 bytes:
+QvnQ5XlH, sext, cext, n, Box[S', K](S->C')
+   -- random nonce (16 bytes), 24-byte nonce formed with "CurveCPK" prefixed
+   -- S' is the server's short-term public key
+   -- K is a cookie, Box[C', s'](t), where t is a minute key (96 bytes)
+   -- Box is 144 bytes
+
+Initiate 544+M bytes:
+QvnQ5XlI, sext, cext, C', K, n, Box[C, n', V, N, ...](C'->S')
+   -- increasing nonce (8 bytes), 24-byte nonce formed with "CurveCP-client-I" prefixed
+   -- C is the client's long-term public key (32 bytes)
+   -- n' is a client random nonce (16 bytes), implicitly prefixx "CurveCPV"
+   -- V = Box[C'](C->S) (48 bytes)
+   -- N is the server's domain name (256 bytes, 1-255 bytes + zero-pad)
+   -- ... is a message (up to 640 bytes)
+   -- Box is 368+M bytes
+
+Message (server to client) 64+M bytes:
+RL3aNMXM, sext, cext, n, Box[...](S'->C')
+   -- increasing nonce (8 bytes), prefixed with CurveCP-server-M
+   -- Box is 16+M bytes
+
+Message (client to server) 96+M bytes:
+QvnQ5XlM, sext, cext, C', n, Box[...](C'->S')
+   -- increasing nonce (8 bytes), prefixed with CurveCP-client-M
+   -- Box is 16+M bytes
+
+Message contents 16-1088 bytes, in multiples of 16 (zero-padded):
+   -- message id (4 bytes)
+   -- congestion info (40 bytes)
+   -- position in connection stream (8 bytes)
+   -- block, up to 1,024 bytes
