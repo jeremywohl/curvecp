@@ -14,10 +14,12 @@ Heuristics:
 4. Discard new Hello's/Initiate's from active C' connections (though we have to respond to repeated Initiate's -- ack only?).
 5. Discard new Hello's/Initiate's from used C', expire cache with minute keys.
 6. Discard packets with nonces less than or equal to latest (if latest is some other position)?
+7. Stochastic packet transmission to thwart prediction.
 
 Questions:
 
 1. With minute keys, what is 2-minute timeout mentioned?
+     "Two minutes after a connection is closed, both the client and the server are unable to understand (or verify) what was sent through the network."
 
 Global state:
 
@@ -25,6 +27,7 @@ Global state:
 
 Per-connection state:
 
+-. Short-term keypair
 0. current client IP, port and extension
 1. 8-byte increasing nonce, both local and last received
 2. received byte position
@@ -43,13 +46,13 @@ Common format:
 Hello 224 bytes:
 QvnQ5XlH, sext, cext, C', 0, n, Box[0'](C'->S)
    -- C' is client's short-term public key, S is server's long-term public key
-   -- 0 is zero-padding (64 bytes)
+   -- 0 is zero-padding (must be 64 bytes)
    -- increasing nonce (8 bytes), 24-byte nonce formed with "CurveCP-client-H" prefixed
-   -- 0' is zero-padding (64 bytes, 80-byte box)
+   -- 0' is zero-padding (must be 64 bytes, 80-byte box)
    -- Box is 80 bytes
 
 Cookie 200 bytes:
-QvnQ5XlH, sext, cext, n, Box[S', K](S->C')
+RL3aNMXK, sext, cext, n, Box[S', K](S->C')
    -- random nonce (16 bytes), 24-byte nonce formed with "CurveCPK" prefixed
    -- S' is the server's short-term public key
    -- K is a cookie, Box[C', s'](t), where t is a minute key (96 bytes)
