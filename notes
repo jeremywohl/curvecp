@@ -16,6 +16,10 @@ Heuristics:
 6. Discard packets with nonces less than or equal to latest (if latest is some other position)?
 7. Stochastic packet transmission to thwart prediction.
 
+Tests:
+
+1. Closing: test Close() with a non-zero backlog and make sure connections are notified.
+
 Questions:
 
 1. With minute keys, what is 2-minute timeout mentioned?

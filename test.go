@@ -7,17 +7,15 @@ import (
 	// "crypto/rand"
 	"net"
 	"fmt"
+	"./curvecp"
 )
 
 func main() {
-	// pub, priv, _ := box.GenerateKey(rand.Reader)
-	// fmt.Println(pub)
-	// fmt.Println(priv)
+	fmt.Println("start")
+	
 	addr := &net.UDPAddr{ net.ParseIP("127.0.0.1"), 1034 }
-	conn, _ := net.ListenUDP("udp", addr)
+	conn, _ := curvecp.Listen(addr)
 	
-	b := make([]byte, 1400)
-	count, err := conn.Read(b)
-	
-	fmt.Printf("count: %d, err: %v, packet: %s\n", count, err, string(b))
+	var b [1088]byte
+	conn.Read(b[:])
 }
