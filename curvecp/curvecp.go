@@ -117,9 +117,9 @@ func ListenCurveCP(net string, addr *net.UDPAddr) (l *CurveCPListener, err error
 
 func (l *CurveCPListener) Accept() (c *CurveCPConn, err error) {
 	select {
-	case c <- l.backlog:
+	case c = <- l.backlog:
 		return c, nil
-	case <- quit:
+	case <- l.closing:
 		return nil, nil  // TODO: appropriate error code?
 	}
 }
@@ -136,39 +136,39 @@ func (l *CurveCPListener) reactor() {
 	// respond to Initiate with an empty Message packet and return to caller
 	// respond to ClientMessage's
 
+	var buff [1400]byte
+
 	for {
-		var buff [1400]byte
 		bytesRead, _, _ := c.conn.ReadFromUDP(buff[:])
 
 		if bytesRead > maxUDPPacketLength {
 			debug(-1, -1, packetDiscard, kindUnknown)
-			// return ...
+			continue
 		}
 	
 		if bytesRead < minUDPPacketLength {
 			debug(-2, -1, packetDiscard, kindUnknown)
+			continue
 		}
 	
 		magic := buff[:8]
 	
 		if bytes.Equal(magic, kindHello.magic) && bytesRead == helloPacketLength {
-			readHello(buff[:helloPacketLength])
+			processHello(buff[:bytesRead])
 		} else if bytes.Equal(magic, kindInitiate.magic) {
-			readInitiate(buff[:maxUDPPacketLength])
+			processInitiate(buff[:bytesRead])
 		} else if bytes.Equal(magic, kindClientMessage.magic) {
-			readClientMessage(buff[:maxUDPPacketLength])
+			processClientMessage(buff[:bytesRead])
 		} else {
-		
+			debug(bytesRead, -1, packetDiscard, kindUnknown)
+			continue
 		}
 	}
 
-	
 	c.ephPublicKey, c.ephPrivateKey, err = box.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
-	
-	
 }
 
 func Dial(addr *net.UDPAddr) (c * CurveCPConn, err error) {
