@@ -2,6 +2,9 @@ package main
 
 // CurveCP creates a reliable, encrypted stream between authenticated parties.
 
+// feature: provide keys up front, server key, acceptable clients
+// feature: debugging (in the absence of tcpdump)
+
 import (
 	// "code.google.com/p/go.crypto/nacl/box"
 	// "crypto/rand"
