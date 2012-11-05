@@ -1,5 +1,9 @@
 package curvecp
 
+// Working on:
+//  Parsing Hello packets
+//  updating minute keys (after every packet), what logic to diff keys
+
 import (
 	"code.google.com/p/go.crypto/nacl/box"
 	"crypto/rand"
@@ -11,10 +15,13 @@ import (
 	"list"
 )
 
-const minUDPPacketLength = 64
-const maxUDPPacketLength = 1184
+const minUDPPayload      = 64
+const maxUDPPayload      = 1184
 const helloPacketLength  = 224
 const cookiePacketLength = 200
+const backlogDefaultSize = 128
+const dirIncoming        = 1
+const dirOutgoing        = 2
 
 const (
 	packetGood    = '-'
@@ -42,7 +49,7 @@ type helloPacket struct {
 	box           [80]byte
 }
 
-func debug(packetLength, payloadLength int, ajudication byte, kind packetKind) {
+func debug(direction, packetLength, payloadLength int, ajudication byte, kind packetKind) {
 	var l string
 	
 	switch packetLength {
@@ -76,21 +83,26 @@ type CurveCPConn struct {
 type CurveCPListener struct {
 	connections map[[]byte]*net.UDPConn
 	
+	conn *net.UDPConn
+	
 	backlog chan *CurveCPConn
 	backlogSize int
 	
 	minuteKey [32]byte      // a secret key refreshed once a minute
-	lastMinuteKey [32]byte  // allow 120-second response lags from Cookie packets
-	lastKeyRefresh time.Time
+	priorMinuteKey [32]byte  // allow 120-second response lags from Cookie packets
+	lastMinuteRefresh time.Time
 	// TODO: []clientKeysSeen closed conn cache per minuteKey -- structure as a sub-struct?
 
+	packets chan 
 	closing chan bool
 }
 
 func ListenCurveCP(net string, addr *net.UDPAddr) (l *CurveCPListener, err error) {
 	l = new(CurveCPListener)
 
-	l.backlogSize = 5
+	if l.backlogSize == 0 {
+		l.backlogSize = backlogDefaultSize
+	}
  	l.backlog = make(chan *CurveCPConn, l.backlogSize)
 
 	l.closing = make(chan bool)
@@ -99,7 +111,7 @@ func ListenCurveCP(net string, addr *net.UDPAddr) (l *CurveCPListener, err error
 	if err != nil {
 		return err
 	}
-	err = rand.Read(l.lastMinuteKey)  // randomize while unused in first 60 seconds
+	err = rand.Read(l.priorMinuteKey)  // randomize while unused in first 60 seconds
 	if err != nil {
 		return err
 	}
@@ -135,32 +147,36 @@ func (l *CurveCPListener) reactor() {
 	// respond to Hello's
 	// respond to Initiate with an empty Message packet and return to caller
 	// respond to ClientMessage's
-
-	var buff [1400]byte
+	// since we need to react to a number of timing signals, might be better to use a goroutine to
+	//  to channel packets, then select on that and various timers
 
 	for {
+		var buff [1400]byte
+
 		bytesRead, _, _ := c.conn.ReadFromUDP(buff[:])
 
-		if bytesRead > maxUDPPacketLength {
+		l.updateMinuteKeys()
+		
+		if bytesRead > maxUDPPayload {
 			debug(-1, -1, packetDiscard, kindUnknown)
 			continue
 		}
 	
-		if bytesRead < minUDPPacketLength {
+		if bytesRead < minUDPPayload {
 			debug(-2, -1, packetDiscard, kindUnknown)
 			continue
 		}
 	
 		magic := buff[:8]
 	
-		if bytes.Equal(magic, kindHello.magic) && bytesRead == helloPacketLength {
-			processHello(buff[:bytesRead])
+		if bytes.Equal(magic, kindClientMessage.magic) {
+			processClientMessage(buff[8:bytesRead])
+		} else if bytes.Equal(magic, kindHello.magic) && bytesRead == helloPacketLength {
+			processHello(buff[8:bytesRead])
 		} else if bytes.Equal(magic, kindInitiate.magic) {
-			processInitiate(buff[:bytesRead])
-		} else if bytes.Equal(magic, kindClientMessage.magic) {
-			processClientMessage(buff[:bytesRead])
+			processInitiate(buff[8:bytesRead])
 		} else {
-			debug(bytesRead, -1, packetDiscard, kindUnknown)
+			debug(dirIncoming, bytesRead, -1, packetDiscard, kindUnknown)
 			continue
 		}
 	}
@@ -171,17 +187,53 @@ func (l *CurveCPListener) reactor() {
 	}
 }
 
-func Dial(addr *net.UDPAddr) (c * CurveCPConn, err error) {
-	c = new(CurveConn)
+func readHello(buff []byte) (err error) {
+	var pckt helloPacket
 	
-	c.conn, err = net.DialUDP("udp", nil, addr)
+	p := bytes.NewBuffer(buff)
+	
+	err = binary.Read(p, binary.LittleEndian, &pckt)
+	
 	if err != nil {
-		return nil, err
+		return err
 	}
 	
-	return c, nil
-}
+	fmt.Println("hi")
 	
+	return nil
+}
+
+// TODO: do not process a packet if minute keys cannot be updated
+func (l *CurveCPListener) updateMinuteKeys() error {
+	now   := time.Now()
+	since := now.Sub(l.lastMinuteRefresh)
+	
+	if since > 60 && since < 120 {
+		copy(l.priorMinuteKey, l.minuteKey)
+
+		err := rand.Read(l.minuteKey)
+		if err != nil {
+			return err
+		}
+	}
+	
+	if since > 120 {
+		err := rand.Read(l.minuteKey)
+		if err != nil {
+			return err
+		}
+		err = rand.Read(l.priorMinuteKey)
+		if err != nil {
+			return err
+		}
+		
+	}
+
+	lastKeyRefresh = now
+	
+	return nil
+}
+
 func (c *CurveCPConn) Read(b []byte) (err error) {
 	for ;; {
 		var buff [1400]byte
@@ -212,22 +264,17 @@ func (c *CurveCPConn) Read(b []byte) (err error) {
 	return nil
 }
 
-func readHello(buff []byte) (err error) {
-	var pckt helloPacket
+func Dial(addr *net.UDPAddr) (c * CurveCPConn, err error) {
+	c = new(CurveConn)
 	
-	p := bytes.NewBuffer(buff)
-	
-	err = binary.Read(p, binary.LittleEndian, &pckt)
-	
+	c.conn, err = net.DialUDP("udp", nil, addr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	
-	fmt.Println("hi")
-	
-	return nil
+	return c, nil
 }
-
+	
 func readInitiate(buff []byte) { }
 func readClientMessage(buff []byte) { }
 
