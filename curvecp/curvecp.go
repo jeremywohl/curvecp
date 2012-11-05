@@ -3,6 +3,7 @@ package curvecp
 // Working on:
 //  Parsing Hello packets
 //  updating minute keys (after every packet), what logic to diff keys
+//  consider packet consumption as channel, so timers can go on select
 
 import (
 	"code.google.com/p/go.crypto/nacl/box"
