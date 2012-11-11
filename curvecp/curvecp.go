@@ -29,6 +29,15 @@ const (
 	packetDiscard = 'd'
 )
 
+const (
+	nonceHelloPrefix         = "CurveCP-client-H"
+	nonceCookiePrefix        = "CurveCPK"
+	nonceInitiatePrefix      = "CurveCP-client-I"
+	nonceInitiatecPrefix     = "CurveCPV"
+	nonceServerMessagePrefix = "CurveCP-server-M"
+	nonceClientMessagePrefix = "CurveCP-client-M"
+)
+
 type packetKind struct {
 	magic []byte
 	marker byte
@@ -91,7 +100,8 @@ type CurveCPListener struct {
 	
 	minuteKey [32]byte      // a secret key refreshed once a minute
 	priorMinuteKey [32]byte  // allow 120-second response lags from Cookie packets
-	lastMinuteRefresh time.Time
+	minuteTicker *time.Ticker
+	minuteMutex sync.Mutex
 	// TODO: []clientKeysSeen closed conn cache per minuteKey -- structure as a sub-struct?
 
 	packets chan 
@@ -108,15 +118,8 @@ func ListenCurveCP(net string, addr *net.UDPAddr) (l *CurveCPListener, err error
 
 	l.closing = make(chan bool)
 	
-	err = rand.Read(l.minuteKey)
-	if err != nil {
-		return err
-	}
-	err = rand.Read(l.priorMinuteKey)  // randomize while unused in first 60 seconds
-	if err != nil {
-		return err
-	}
-	lastKeyRefresh = time.Now()
+	l.updateMinuteKeysOnce()  // scramble both minutes
+	l.updateMinuteKeysOnce()
 	
 	l.conn, err = net.ListenUDP(net, addr)
 	if err != nil {
@@ -124,6 +127,9 @@ func ListenCurveCP(net string, addr *net.UDPAddr) (l *CurveCPListener, err error
 	}
 	
 	go l.reactor()
+
+	l.minuteTicker = time.NewTicker(time.Minute)
+	go l.updateMinuteKeys()
 	
 	return c, nil
 }
@@ -139,6 +145,7 @@ func (l *CurveCPListener) Accept() (c *CurveCPConn, err error) {
 
 func (l *CurveCPListener) Close() {
 	l.closing <- true
+	l.minuteTicker.Stop()
 	
 	// TODO: notify backlog clients
 	// ... ?
@@ -156,8 +163,6 @@ func (l *CurveCPListener) reactor() {
 
 		bytesRead, _, _ := c.conn.ReadFromUDP(buff[:])
 
-		l.updateMinuteKeys()
-		
 		if bytesRead > maxUDPPayload {
 			debug(-1, -1, packetDiscard, kindUnknown)
 			continue
@@ -188,51 +193,51 @@ func (l *CurveCPListener) reactor() {
 	}
 }
 
-func readHello(buff []byte) (err error) {
-	var pckt helloPacket
-	
-	p := bytes.NewBuffer(buff)
-	
-	err = binary.Read(p, binary.LittleEndian, &pckt)
-	
-	if err != nil {
-		return err
+func processHello(buff []byte) (err error) {
+	if len(buff) != helloPacketLength {
+		// discard
 	}
 	
-	fmt.Println("hi")
+	var sext, cext    [16]byte
+	var cEphPublicKey [32]byte
+	var nonce         [24]byte
+	var box           [80]byte
+	var data          [64]byte
+	
+	copy(sext,          buff[0:16])
+	copy(cext,          buff[16:32])
+	copy(cEphPublicKey, buff[32:64])
+	copy(nonce,         byte(nonceHello))
+	copy(nonce[16:24],  buff[128:136])
+	
+	data, ok := box.Open(nil, buff[136:], &nonce, l.sPublicKey, cEphPublicKey)
+	if ok == false {
+		// discard
+	}
+	
+	// QQQ: do we need to verify encrypted data is all zeroes?
+	
+	// TODO: prep Cookie packet
 	
 	return nil
 }
 
-// TODO: do not process a packet if minute keys cannot be updated
-func (l *CurveCPListener) updateMinuteKeys() error {
-	now   := time.Now()
-	since := now.Sub(l.lastMinuteRefresh)
-	
-	if since > 60 && since < 120 {
-		copy(l.priorMinuteKey, l.minuteKey)
-
-		err := rand.Read(l.minuteKey)
-		if err != nil {
-			return err
-		}
+func (l *CurveCPListener) updateMinuteKeys() {
+	for range l.minuteTicker.C {
+		l.updateMinuteKeysOnce()
 	}
-	
-	if since > 120 {
-		err := rand.Read(l.minuteKey)
-		if err != nil {
-			return err
-		}
-		err = rand.Read(l.priorMinuteKey)
-		if err != nil {
-			return err
-		}
-		
-	}
+}
 
-	lastKeyRefresh = now
+func (l *CurveCPListener) updateMinuteKeysOnce() {
+	minuteMutex.Lock()
+	defer minuteMutex.unLock()
 	
-	return nil
+	copy(l.priorMinuteKey, l.minuteKey)
+
+	err := rand.Read(l.minuteKey)
+	if err != nil {
+		panic()  // TODO: alternatively, stop accepting connections temporarily
+	}
 }
 
 func (c *CurveCPConn) Read(b []byte) (err error) {
