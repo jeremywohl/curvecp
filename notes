@@ -61,6 +61,7 @@ RL3aNMXK, sext, cext, n, Box[S', K](S->C')
    -- S' is the server's short-term public key
    -- K is a cookie, Box[C', s'](t), where t is a minute key (96 bytes)
    -- Box is 144 bytes
+   -- note: the server's short-term secret key is thrown away here
 
 Initiate 544+M bytes:
 QvnQ5XlI, sext, cext, C', K, n, Box[C, n', V, N, ...](C'->S')

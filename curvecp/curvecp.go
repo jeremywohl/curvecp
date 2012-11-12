@@ -186,11 +186,6 @@ func (l *CurveCPListener) reactor() {
 			continue
 		}
 	}
-
-	c.ephPublicKey, c.ephPrivateKey, err = box.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, err
-	}
 }
 
 func processHello(buff []byte) (err error) {
@@ -207,7 +202,7 @@ func processHello(buff []byte) (err error) {
 	copy(sext,          buff[0:16])
 	copy(cext,          buff[16:32])
 	copy(cEphPublicKey, buff[32:64])
-	copy(nonce,         byte(nonceHello))
+	copy(nonce,         []byte("CurveCP-client-H"))
 	copy(nonce[16:24],  buff[128:136])
 	
 	data, ok := box.Open(nil, buff[136:], &nonce, l.sPublicKey, cEphPublicKey)
@@ -217,9 +212,37 @@ func processHello(buff []byte) (err error) {
 	
 	// QQQ: do we need to verify encrypted data is all zeroes?
 	
-	// TODO: prep Cookie packet
+	// send Cookie packet
+
+	sEphPublicKey, sEphPrivateKey, err := box.GenerateKey(rand.Reader)
+	if err != nil {
+		panic()
+	}
+	
+	var cookieBuff [200]byte
+	var kookieData [96]byte
+	var nonce2     [24]byte
+	var data2      [128]byte
+	
+	copy(cookieBuff,       kindCookie.magic)
+	copy(cookieBuff[8:],   sext)
+	copy(cookieBuff[24:],  cext)
+	randomnonce(cookieBuff[40:56])
+	copy(kookieData[:],    cEphPublicKey)
+	copy(kookieData[32:],  sEphPrivateKey)
+	copy(nonce2,           []byte("minute-k"))
+	randomnonce(nonce2[16:])
+	secretbox.Seal(buff[56:], kookieData, &nonce2, &l.minuteKey)
+	copy(data2,            )
+	
 	
 	return nil
+}
+
+func randomnonce(b []byte) {
+	if err := rand.Read(b); err != nil {
+		panic()
+	}
 }
 
 func (l *CurveCPListener) updateMinuteKeys() {
