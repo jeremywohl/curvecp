@@ -29,26 +29,17 @@ const (
 	packetDiscard = 'd'
 )
 
-const (
-	nonceHelloPrefix         = "CurveCP-client-H"
-	nonceCookiePrefix        = "CurveCPK"
-	nonceInitiatePrefix      = "CurveCP-client-I"
-	nonceInitiatecPrefix     = "CurveCPV"
-	nonceServerMessagePrefix = "CurveCP-server-M"
-	nonceClientMessagePrefix = "CurveCP-client-M"
-)
-
-type packetKind struct {
-	magic []byte
+type kindOfPacket struct {
+	magic, noncePrefix []byte
 	marker byte
 }
 
-var kindHello          = packetKind{ magic: []byte("QvnQ5XlH"), marker: 'H' }
-var kindCookie         = packetKind{ magic: []byte("RL3aNMXK"), marker: 'C' }
-var kindInitiate       = packetKind{ magic: []byte("QvnQ5XlI"), marker: 'I' }
-var kindServerMessage  = packetKind{ magic: []byte("RL3aNMXM"), marker: 'S' }
-var kindClientMessage  = packetKind{ magic: []byte("QvnQ5XlM"), marker: 'C' }
-var kindUnknown        = packetKind{ magic: []byte(""),         marker: '?' }
+var pktHello          = kindOfPacket{ magic: []byte("QvnQ5XlH"), noncePrefix: []byte("CurveCP-client-H"), marker: 'H' }
+var pktCookie         = kindOfPacket{ magic: []byte("RL3aNMXK"), noncePrefix: []byte("CurveCPK"),         marker: 'C' }
+var pktInitiate       = kindOfPacket{ magic: []byte("QvnQ5XlI"), noncePrefix: []byte("CurveCP-client-I"), marker: 'I' }
+var pktServerMessage  = kindOfPacket{ magic: []byte("RL3aNMXM"), noncePrefix: []byte("CurveCPV"),         marker: 'S' }
+var pktClientMessage  = kindOfPacket{ magic: []byte("QvnQ5XlM"), noncePrefix: []byte("CurveCP-client-M"), marker: 'C' }
+var pktUnknown        = kindOfPacket{ magic: []byte(""),         marker: '?' }
 
 type helloPacket struct {
 	sext          [16]byte  // server extension
