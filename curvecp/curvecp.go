@@ -6,23 +6,25 @@ package curvecp
 //  consider packet consumption as channel, so timers can go on select
 
 import (
+	"bytes"
 	"code.google.com/p/go.crypto/nacl/box"
 	"crypto/rand"
-	"net"
-	"fmt"
-	"time"
-	"bytes"
 	"encoding/binary"
+	"fmt"
 	"list"
+	"net"
+	"time"
 )
 
-const minUDPPayload      = 64
-const maxUDPPayload      = 1184
-const helloPacketLength  = 224
-const cookiePacketLength = 200
-const backlogDefaultSize = 128
-const dirIncoming        = 1
-const dirOutgoing        = 2
+const (
+	minUDPPayload      = 64
+	maxUDPPayload      = 1184
+	helloPacketLength  = 224
+	cookiePacketLength = 200
+	backlogDefaultSize = 128
+	dirIncoming        = 1
+	dirOutgoing        = 2
+)
 
 const (
 	packetGood    = '-'
@@ -31,20 +33,22 @@ const (
 
 type kindOfPacket struct {
 	magic, noncePrefix []byte
-	marker byte
+	marker             byte
 }
 
-var pktHello          = kindOfPacket{ magic: []byte("QvnQ5XlH"), noncePrefix: []byte("CurveCP-client-H"), marker: 'H' }
-var pktCookie         = kindOfPacket{ magic: []byte("RL3aNMXK"), noncePrefix: []byte("CurveCPK"),         marker: 'C' }
-var pktInitiate       = kindOfPacket{ magic: []byte("QvnQ5XlI"), noncePrefix: []byte("CurveCP-client-I"), marker: 'I' }
-var pktServerMessage  = kindOfPacket{ magic: []byte("RL3aNMXM"), noncePrefix: []byte("CurveCPV"),         marker: 'S' }
-var pktClientMessage  = kindOfPacket{ magic: []byte("QvnQ5XlM"), noncePrefix: []byte("CurveCP-client-M"), marker: 'C' }
-var pktUnknown        = kindOfPacket{ magic: []byte(""),         marker: '?' }
+var (
+	helloPkt         = kindOfPacket{marker: 'H', magic: []byte("QvnQ5XlH"), noncePrefix: []byte("CurveCP-client-H")}
+	cookiePkt        = kindOfPacket{marker: 'C', magic: []byte("RL3aNMXK"), noncePrefix: []byte("CurveCPK")}
+	inititatePkt     = kindOfPacket{marker: 'I', magic: []byte("QvnQ5XlI"), noncePrefix: []byte("CurveCP-client-I")}
+	serverMessagePkt = kindOfPacket{marker: 'S', magic: []byte("RL3aNMXM"), noncePrefix: []byte("CurveCPV")}
+	clientMessagePkt = kindOfPacket{marker: 'C', magic: []byte("QvnQ5XlM"), noncePrefix: []byte("CurveCP-client-M")}
+	unknownPkt       = kindOfPacket{marker: '?', magic: []byte("")}
+)
 
 type helloPacket struct {
-	sext          [16]byte  // server extension
-	cext          [16]byte  // client extension
-	cEphPublicKey [32]byte  // client ephemeral (short-term) public key
+	sext          [16]byte // server extension
+	cext          [16]byte // client extension
+	cEphPublicKey [32]byte // client ephemeral (short-term) public key
 	padding       [64]byte
 	nonce         [8]byte
 	box           [80]byte
@@ -52,7 +56,7 @@ type helloPacket struct {
 
 func debug(direction, packetLength, payloadLength int, ajudication byte, kind packetKind) {
 	var l string
-	
+
 	switch packetLength {
 	case -1:
 		l = "++++"
@@ -61,43 +65,42 @@ func debug(direction, packetLength, payloadLength int, ajudication byte, kind pa
 	default:
 		l = string(packetLength)
 	}
-	
+
 	t := time.Now()
-	
+
 	fmt.Printf("%d.%9d %c %c %4s\n", t.Unix(), t.Nanosecond(), kind.marker, ajudication, l)
 }
 
 type CurveCPConn struct {
 	listener *CurveCPListener
-	conn *net.UDPConn
-	
+	conn     *net.UDPConn
+
 	start time.Time
 	debug bool
-	
+
 	// ephemeral (short-term) key pair
 	ephPublicKey  *[32]byte
 	ephPrivateKey *[32]byte
-	
+
 	sharedKey *[32]byte
-	
+
 	// read/write buffer
 }
 
 type CurveCPListener struct {
 	connections map[[]byte]*net.UDPConn
-	
+
 	conn *net.UDPConn
-	
-	backlog chan *CurveCPConn
+
+	backlog     chan *CurveCPConn
 	backlogSize int
-	
-	minuteKey [32]byte      // a secret key refreshed once a minute
-	priorMinuteKey [32]byte  // allow 120-second response lags from Cookie packets
-	minuteTicker *time.Ticker
-	minuteMutex sync.Mutex
+
+	minuteKey      [32]byte // a secret key refreshed once a minute
+	priorMinuteKey [32]byte // allow 120-second response lag from Cookie packets
+	minuteTicker   *time.Ticker
+	minuteMutex    sync.Mutex
 	// TODO: []clientKeysSeen closed conn cache per minuteKey -- structure as a sub-struct?
 
-	packets chan 
 	closing chan bool
 }
 
@@ -107,39 +110,39 @@ func ListenCurveCP(net string, addr *net.UDPAddr) (l *CurveCPListener, err error
 	if l.backlogSize == 0 {
 		l.backlogSize = backlogDefaultSize
 	}
- 	l.backlog = make(chan *CurveCPConn, l.backlogSize)
+	l.backlog = make(chan *CurveCPConn, l.backlogSize)
 
 	l.closing = make(chan bool)
-	
-	l.updateMinuteKeysOnce()  // scramble both minutes
+
+	l.updateMinuteKeysOnce() // scramble both minutes
 	l.updateMinuteKeysOnce()
-	
+
 	l.conn, err = net.ListenUDP(net, addr)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	go l.serverReactor()
 
 	l.minuteTicker = time.NewTicker(time.Minute)
 	go l.updateMinuteKeys()
-	
+
 	return c, nil
 }
 
 func (l *CurveCPListener) Accept() (c *CurveCPConn, err error) {
 	select {
-	case c = <- l.backlog:
+	case c = <-l.backlog:
 		return c, nil
-	case <- l.closing:
-		return nil, nil  // TODO: appropriate error code?
+	case <-l.closing:
+		return nil, nil // TODO: appropriate error code?
 	}
 }
 
 func (l *CurveCPListener) Close() {
 	l.closing <- true
 	l.minuteTicker.Stop()
-	
+
 	// TODO: notify backlog clients
 	// ... ?
 }
@@ -160,12 +163,12 @@ func (l *CurveCPListener) serverReactor() {
 			debug(-1, -1, packetDiscard, kindUnknown)
 			continue
 		}
-	
+
 		if bytesRead < minUDPPayload {
 			debug(-2, -1, packetDiscard, kindUnknown)
 			continue
 		}
-	
+
 		switch {
 		case bytes.HasPrefix(buff, kindClientMessage.magic):
 			processClientMessage(buff[8:bytesRead], raddr)
@@ -184,51 +187,55 @@ func processHello(buff []byte, raddr *UDPAddr) (err error) {
 	if len(buff) != helloPacketLength {
 		// discard
 	}
-	
-	var sext, cext     [16]byte
-	var cEphPublicKey  [32]byte
-	var helloSharedKey [32]byte  // only used in these two packets (C', s)
-	var nonce          [24]byte
-	var box            [80]byte
-	var data           [64]byte
-	
+
+	var (
+		sext, cext     [16]byte
+		cEphPublicKey  [32]byte
+		helloSharedKey [32]byte // only used in these two packets (C', s)
+		nonce          [24]byte
+		box            [80]byte
+		data           [64]byte
+	)
+
 	copy(sext,          buff[0:16])
 	copy(cext,          buff[16:32])
 	copy(cEphPublicKey, buff[32:64])
-	copy(nonce,         []byte("CurveCP-client-H"))
+	copy(nonce,         helloPkt.noncePrefix)
 	copy(nonce[16:24],  buff[128:136])
-	
+
 	box.Precompute(&helloSharedKey, &cEphPublicKey, &sPrivateKey)
-	
+
 	data, ok := box.OpenAfterPrecomputation(nil, buff[136:], &nonce, &helloSharedKey)
 	if ok == false {
 		// discard
 	}
-	
+
 	// Q: do we need to verify encrypted data is all zeroes?
-	
+
 	// send Cookie packet
 
 	sEphPublicKey, sEphPrivateKey, err := box.GenerateKey(rand.Reader)
 	if err != nil {
 		panic()
 	}
-	
-	var cookieBuff [200]byte
-	var kookieData [96]byte
-	var data2      [128]byte
-	
+
+	var (
+		cookieBuff [200]byte
+		kookieData [96]byte
+		data2      [128]byte
+	)
+
 	copy(kookieData[:],   cEphPublicKey)
 	copy(kookieData[32:], sEphPrivateKey)
-	copy(nonce,           []byte("minute-k"))
+	copy(nonce,           []byte("backtome"))
 	randomnonce(nonce[8:])
 	copy(cookieBuff[56:], nonce[8:])
 	secretbox.Seal(cookieBuff[56:], kookieData, &nonce, &l.minuteKey)
 
-	copy(cookieBuff,        kindCookie.magic)
+	copy(cookieBuff,        cookiePkt.magic)
 	copy(cookieBuff[8:],    sext)
 	copy(cookieBuff[24:],   cext)
-	copy(nonce,             []byte("CurveCPK"))
+	copy(nonce,             cookiePkt.noncePrefix)
 	randomnonce(nonce[8:])
 	copy(cookieBuff[40:56], nonce[8:])
 	copy(data2[:],          sEphPublicKey)
@@ -239,7 +246,7 @@ func processHello(buff []byte, raddr *UDPAddr) (err error) {
 	if err != nil {
 		panic()
 	}
-	
+
 	return nil
 }
 
@@ -250,7 +257,7 @@ func randomnonce(b []byte) {
 }
 
 func (l *CurveCPListener) updateMinuteKeys() {
-	for range l.minuteTicker.C {
+	for _ := range l.minuteTicker.C {
 		l.updateMinuteKeysOnce()
 	}
 }
@@ -258,21 +265,21 @@ func (l *CurveCPListener) updateMinuteKeys() {
 func (l *CurveCPListener) updateMinuteKeysOnce() {
 	minuteMutex.Lock()
 	defer minuteMutex.unLock()
-	
+
 	copy(l.priorMinuteKey, l.minuteKey)
 
 	err := rand.Read(l.minuteKey)
 	if err != nil {
-		panic()  // TODO: alternatively, stop accepting connections temporarily
+		panic() // TODO: alternatively, stop accepting connections temporarily
 	}
 }
 
 // The connection is lazily established during the first Read() or Write() to allow data to be
 // included in the handshake.
-func Dial(addr *net.UDPAddr) (c * CurveCPConn, err error) {
+func Dial(addr *net.UDPAddr) (c *CurveCPConn, err error) {
 	c = new(CurveConn)
-	
-	c.ephPublicKey, c.ephPrivateKey, err := box.GenerateKey(rand.Reader)
+
+	c.ephPublicKey, c.ephPrivateKey, err = box.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
@@ -281,9 +288,9 @@ func Dial(addr *net.UDPAddr) (c * CurveCPConn, err error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	go c.clientReactor()
-	
+
 	return c, nil
 }
 
@@ -297,12 +304,12 @@ func (l *CurveCPListener) clientReactor() {
 			debug(-1, -1, packetDiscard, kindUnknown)
 			continue
 		}
-	
+
 		if bytesRead < minUDPPayload {
 			debug(-2, -1, packetDiscard, kindUnknown)
 			continue
 		}
-	
+
 		switch {
 		case bytes.HasPrefix(buff, kindServerMessage.magic):
 			processServerMessage(buff[8:bytesRead], raddr)
@@ -314,9 +321,9 @@ func (l *CurveCPListener) clientReactor() {
 		}
 	}
 }
-	
+
 func (c *CurveCPConn) Read(b []byte) (err error) {
-	for ;; {
+	for {
 		var buff [1400]byte
 		bytesRead, _, _ := c.conn.ReadFromUDP(buff[:])
 
@@ -324,13 +331,13 @@ func (c *CurveCPConn) Read(b []byte) (err error) {
 			debug(-1, -1, packetDiscard, kindUnknown)
 			// return ...
 		}
-		
+
 		if bytesRead < minUDPPacketLength {
 			debug(-2, -1, packetDiscard, kindUnknown)
 		}
-		
+
 		magic := buff[:8]
-		
+
 		if bytes.Equal(magic, kindHello.magic) && bytesRead == helloPacketLength {
 			readHello(buff[:helloPacketLength])
 		} else if bytes.Equal(magic, kindInitiate.magic) {
@@ -338,15 +345,15 @@ func (c *CurveCPConn) Read(b []byte) (err error) {
 		} else if bytes.Equal(magic, kindClientMessage.magic) {
 			readClientMessage(buff[:maxUDPPacketLength])
 		} else {
-			
+
 		}
 	}
-	
+
 	return nil
 }
 
-func readInitiate(buff []byte) { }
-func readClientMessage(buff []byte) { }
+func readInitiate(buff []byte)      {}
+func readClientMessage(buff []byte) {}
 
 func (c *CurveCPConn) Write() (count int) {
 	b := make([]byte, 2000)
@@ -354,6 +361,6 @@ func (c *CurveCPConn) Write() (count int) {
 	for i := 0; i < 2; i++ {
 		count, _ = c.conn.Write(b)
 	}
-	
+
 	return count
 }
