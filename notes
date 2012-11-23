@@ -5,6 +5,7 @@ Rules:
 3. A client may only send 2^64 packets in a connection (will never be reached).
 4. Message packets must include nonces that are monotically increasing, to allow them to discard "prior" lower-nonced packets.
 5. Use whatever IP address the clients is currently sending from.
+6. At the end of a connection, zero our copy of S'/s' & the shared key.
 
 Heuristics:
 
