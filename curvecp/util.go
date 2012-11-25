@@ -4,7 +4,10 @@ func randomnonce(b []byte) {
 	}
 }
 
-func randomfuzz() {}
+// randomly add up to 30%
+func randomfuzz(in int64) int64 {
+	
+}
 
 func debug(direction, packetLength, payloadLength int, ajudication byte, kind packetKind) {
 	var l string

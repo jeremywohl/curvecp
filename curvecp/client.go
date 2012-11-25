@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+type curveCPClient struct {
+	kpacket *[]byte
+}
+
 // The connection is lazily established, letting data be included in the handshake.
 // A subsequent Read() or Write() may fail establishing a connection.
 func Dial(addr *net.UDPAddr) (c *CurveCPConn, err error) {
@@ -30,13 +34,22 @@ func Dial(addr *net.UDPAddr) (c *CurveCPConn, err error) {
 		return nil, err
 	}
 
+	c.sendHello()
+	connectTimer = time.newTimer(connectTimeout)
+	
+
 	// send hello and start one second timer
 	// for {}
 	// select on helloRepeatTimer, connect deadline, cookie packet, 60-second overall deadline
 	
 	for {
 		select {
-			case <-time.After(min(c.deadline, time.Minute)) // connection timeout
+		case <-cookies:
+			// ...
+		case <-time.After(time.Second): // repeat Hello TODO: fuzz + backoff
+			sendHello()
+		case <-time.After(min(c.deadline, time.Minute)): // connection timeout
+			return nil, ConnectionTimeoutError
 		}
 	}
 
@@ -47,6 +60,40 @@ func Dial(addr *net.UDPAddr) (c *CurveCPConn, err error) {
 
 func DialWithUnauthenticatedServer() {}
 func DialWithServerKey() {}
+
+func (c *CurveCPConn) cookieReceiver() {
+	for {
+		var buff [1400]byte
+
+		bytesRead, raddr, _ := l.conn.ReadFromUDP(buff[:])
+
+		if bytes != cookiePacketLength) {
+			debug(-1, -1, packetDiscard, kindUnknown)
+			continue
+		}
+
+		if !bytes.HasPrefix(buff, cookiePkt.magic) {
+			debug()
+			continue
+		}
+
+		// packet verification
+		// compute shared key
+		// record K sub-packet
+
+		var box [144]byte
+		var nonce [24]byte
+		
+		copy(nonce, packet[40:56])
+		// decrypt from C' and S
+		box.Open(foo,bar,jim)
+
+		c.client.kpacket = make([]byte, 96)
+		copy(c.client.kpacket, packet[])
+		
+		
+	}
+}
 
 func (l *CurveCPListener) clientReactor() {
 	for {
