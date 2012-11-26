@@ -1,3 +1,5 @@
+package curvecp
+
 func randomnonce(b []byte) {
 	if err := rand.Read(b); err != nil {
 		panic()
@@ -9,7 +11,7 @@ func randomfuzz(in int64) int64 {
 	
 }
 
-func debug(direction, packetLength, payloadLength int, ajudication byte, kind packetKind) {
+func debug(direction, packetLength, payloadLength int, ajudication byte, kind kindOfPacket) {
 	var l string
 
 	switch packetLength {

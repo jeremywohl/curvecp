@@ -6,8 +6,8 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
-	"list"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -31,12 +31,8 @@ type CurveCPConn struct {
 	nonce int64
 }
 
-type curveCPClient struct {
-	phase int
-}
-
 type CurveCPListener struct {
-	connections map[[]byte]*net.UDPConn
+	connections map[[32]byte]*net.UDPConn
 
 	conn *net.UDPConn
 

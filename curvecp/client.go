@@ -1,33 +1,46 @@
 package curvecp
 
 import (
+	"math/big"
 	"bytes"
 	"code.google.com/p/go.crypto/nacl/box"
 	"crypto/rand"
-	"encoding/binary"
-	"fmt"
-	"list"
+	//"encoding/binary"
+	//"fmt"
 	"net"
 	"time"
 )
 
+// temporary variables used during connection setup
 type curveCPClient struct {
-	kpacket *[]byte
+	serverCookie   [96]byte
+	sharedHelloKey [32]byte
+	sharedVouchKey [32]byte
 }
 
 // The connection is lazily established, letting data be included in the handshake.
 // A subsequent Read() or Write() may fail establishing a connection.
 func Dial(addr *net.UDPAddr) (c *CurveCPConn, err error) {
-	c = new(CurveConn)
+	c = new(CurveCPConn)
+	c.client = new(curveCPClient)
 	
-	connectTimeout = c.TimeAfter() // min (60s or deadline)
-
 	c.ephPublicKey, c.ephPrivateKey, err = box.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
 
-	c.nonce = rand.Int63n(1<<48) // start incrementing at random [0,2^48)
+	// TODO: fetch server and client long-term keys
+	var sPublicKey [32]byte
+	var cPrivateKey [32]byte
+	
+	box.Precompute(&c.client.sharedHelloKey, &sPublicKey, c.ephPrivateKey)
+	box.Precompute(&c.client.sharedVouchKey, &sPublicKey, &cPrivateKey)
+	
+	nonceInt, err := rand.Int(rand.Reader, big.NewInt(1<<48)) // start incrementing at random [0,2^48)
+	if err != nil {
+		return nil, err
+	}
+	c.nonce = nonceInt.Int64()
 	
 	c.conn, err = net.DialUDP("udp", nil, addr)
 	if err != nil {
@@ -35,20 +48,19 @@ func Dial(addr *net.UDPAddr) (c *CurveCPConn, err error) {
 	}
 
 	c.sendHello()
-	connectTimer = time.newTimer(connectTimeout)
-	
+	deadline := 1000 // TODO: add to connection struct
+	connectionTimeout := time.NewTimer(min(deadline, 60 * time.Second))
 
-	// send hello and start one second timer
-	// for {}
-	// select on helloRepeatTimer, connect deadline, cookie packet, 60-second overall deadline
+	cookies := make(chan bool)
+	go c.cookieReceiver(cookies)
 	
 	for {
 		select {
 		case <-cookies:
-			// ...
-		case <-time.After(time.Second): // repeat Hello TODO: fuzz + backoff
-			sendHello()
-		case <-time.After(min(c.deadline, time.Minute)): // connection timeout
+			break
+		case <-time.After(time.Second): // repeat Hello; TODO: fuzz + backoff
+			c.sendHello()
+		case <-connectionTimeout.C:
 			return nil, ConnectionTimeoutError
 		}
 	}
@@ -61,45 +73,52 @@ func Dial(addr *net.UDPAddr) (c *CurveCPConn, err error) {
 func DialWithUnauthenticatedServer() {}
 func DialWithServerKey() {}
 
-func (c *CurveCPConn) cookieReceiver() {
+func (c *CurveCPConn) cookieReceiver(ch chan bool) {
 	for {
 		var buff [1400]byte
 
-		bytesRead, raddr, _ := l.conn.ReadFromUDP(buff[:])
-
-		if bytes != cookiePacketLength) {
-			debug(-1, -1, packetDiscard, kindUnknown)
+		bytesRead, err := c.conn.Read(buff[:])
+		if err != nil {
+			// TODO: debug
 			continue
 		}
 
-		if !bytes.HasPrefix(buff, cookiePkt.magic) {
+		if bytesRead != cookiePacketLength {
+			debug(-1, -1, packetDiscard, 'd', unknownPkt)
+			continue
+		}
+
+		if !bytes.HasPrefix(buff[:], cookiePkt.magic) {
 			debug()
 			continue
 		}
 
-		// packet verification
-		// compute shared key
-		// record K sub-packet
-
-		var box [144]byte
+		var text [128]byte
 		var nonce [24]byte
+		var sEphPublicKey [32]byte
 		
-		copy(nonce, packet[40:56])
-		// decrypt from C' and S
-		box.Open(foo,bar,jim)
+		copy(nonce, cookiePkt.noncePrefix)
+		copy(nonce[8:], packet[40:56])
+		_, ok := box.OpenAfterPrecomputation(text, packet[56:], &nonce, &c.client.sharedHelloKey)
+		if ok == false {
+			debug(-1, -1, packetDiscard, 'd', unknownPkt)
+			continue
+		}
 
-		c.client.kpacket = make([]byte, 96)
-		copy(c.client.kpacket, packet[])
-		
-		
+		copy(sEphPublicKey, text[0:32])
+		box.Precompute(&c.sharedKey, &sEphPublicKey, &c.ephPrivateKey)
+		copy(c.client.serverCookie, text[32:])
+
+		ch <-true
+		break
 	}
 }
 
-func (l *CurveCPListener) clientReactor() {
+func (c *CurveCPConn) clientReactor() {
 	for {
 		var buff [1400]byte
 
-		bytesRead, raddr, _ := l.conn.ReadFromUDP(buff[:])
+		bytesRead, _ := l.conn.Read(buff[:])
 
 		if bytesRead > maxUDPPayload {
 			debug(-1, -1, packetDiscard, kindUnknown)
@@ -113,9 +132,9 @@ func (l *CurveCPListener) clientReactor() {
 
 		switch {
 		case bytes.HasPrefix(buff, kindServerMessage.magic):
-			processServerMessage(buff[8:bytesRead], raddr)
+			processServerMessage(buff[8:bytesRead])
 		case bytes.HasPrefix(buff, kindCookie.magic) && bytesRead == cookiePacketLength:
-			processCookie(buff[8:bytesRead], raddr)
+			processCookie(buff[8:bytesRead])
 		default:
 			debug(dirIncoming, bytesRead, -1, packetDiscard, kindUnknown)
 			continue
@@ -131,8 +150,8 @@ func (c *CurveCPConn) Read(b []byte) (err error) {
 	return nil
 }
 
-func (c *CurveCPConn) sendHello() (err error) {
-	// lookup server's long-term key
+func (c *CurveCPConn) sendHello() error {
+	// TODO: lookup server's long-term key
 	var packet    [224]byte
 	var zeroBytes [64]byte
 	var nonce     [24]byte
@@ -147,7 +166,10 @@ func (c *CurveCPConn) sendHello() (err error) {
 	randomnonce(nonce[16:])
 	
 	copy(packet[136:], nonce[16:])
-	box.
+	box.SealAfterPrecomputation(packet[144:], zeroBytes, &nonce, &c.client.sharedHelloKey)
+	
+	_, err := l.conn.Write(packet)
+	return err
 }
 
 func readInitiate(buff []byte)      {}

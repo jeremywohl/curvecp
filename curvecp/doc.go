@@ -1,3 +1,5 @@
+package curvecp
+
 /*
  Status:
   - This Go implementation is a test of protocol and security features.
