@@ -3,10 +3,10 @@ package curvecp
 /*
  Status:
   - This Go implementation is a test of protocol and security features.
-  - Dan Bernstein's (djb) current implementation, as seen in the NaCl library, is noted as "alpha" and I think these speaks to the
-    protocol as well.  This particularly refers to congestion control, but possibly security as well.
-  - This Go implementation needs more debugging options, since it currently replaces the many excellent tools transacting with kernel
-    interfaces.
+  - Dan Bernstein's (djb) current implementation, as seen in the NaCl library, is noted as "alpha" and presumably this speaks
+    to the protocol/security as well.  He mentions congestion control particularly.
+  - This Go implementation needs significant debugging options, since it replaces the many excellent tools transacting with kernel
+    interfaces re TCP/UDP.
   - Congestion control remains unfinished.
   - Many optimizations
  */
